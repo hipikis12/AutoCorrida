@@ -19,7 +19,20 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      - name: Restaurar chave de assinatura
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > app/autocorrida.jks
+            echo "Chave fixa restaurada"
+          else
+            echo "::warning::Secret KEYSTORE_BASE64 não configurado — assinando com chave temporária"
+          fi
+
       - name: Compilar
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Publicar APK
