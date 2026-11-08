@@ -12,6 +12,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import kotlin.math.abs
 
 /**
@@ -119,10 +120,9 @@ class AutoService : AccessibilityService() {
     private fun passo() {
         if (gestoEmAndamento || cliqueAgendado) return
         val now = SystemClock.uptimeMillis()
-        val root = rootInActiveWindow ?: return
+        val root = raizDoApp() ?: return
         val pkg = root.packageName?.toString() ?: return
         ultimoPacote = pkg
-        if (pkg == packageName) return                                  // nossa própria tela de config
         if (cfg.pacoteAlvo.isNotEmpty() && pkg != cfg.pacoteAlvo) return  // outro app na frente
 
         val tela = Leitor.ler(root, cfg)
@@ -163,6 +163,66 @@ class AutoService : AccessibilityService() {
         }
     }
 
+    /**
+     * Raiz da janela do app que está na tela, IGNORANDO a nossa barrinha e a barra do sistema.
+     * (Antes usava rootInActiveWindow, que vira a barrinha depois de tocar no ▶ — por isso não lia nada.)
+     */
+    private fun raizDoApp(): AccessibilityNodeInfo? {
+        val todas: List<AccessibilityWindowInfo> = try { windows } catch (_: Exception) { emptyList() }
+        val candidatas = todas
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .mapNotNull { w -> w.root?.let { w to it } }
+            .filter { (_, r) -> r.packageName?.toString() != packageName }
+        val escolhida = candidatas.firstOrNull { it.first.isActive || it.first.isFocused }
+            ?: candidatas.maxByOrNull { (w, _) -> Rect().also { w.getBoundsInScreen(it) }.let { it.width() * it.height() } }
+        if (escolhida != null) return escolhida.second
+        val r = rootInActiveWindow ?: return null
+        return if (r.packageName?.toString() == packageName) null else r
+    }
+
+    /** Botão 🔍: salva tudo o que o serviço consegue ler em todas as janelas. */
+    fun diagnosticar() {
+        val sb = StringBuilder()
+        var total = 0
+        val ws = try { windows } catch (_: Exception) { emptyList<AccessibilityWindowInfo>() }
+        sb.append("Janelas: ${ws.size}\n")
+        for (w in ws) {
+            val r = w.root
+            val b = Rect().also { w.getBoundsInScreen(it) }
+            sb.append("\n=== janela tipo=${w.type} ativa=${w.isActive} foco=${w.isFocused} pkg=${r?.packageName} $b\n")
+            if (r != null) total += despejar(r, sb, 0)
+        }
+        val raiz = raizDoApp()
+        val tela = raiz?.let { Leitor.ler(it, cfg) }
+        val resumo = "App lido: ${raiz?.packageName}\nTextos encontrados: $total\n" +
+            "Tela de busca detectada: ${tela?.buscando}\nOfertas detectadas: ${tela?.ofertas?.size ?: 0}" +
+            (tela?.ofertas?.joinToString("") { "\n  • R$/km=${it.porKm} valor=${it.valor} embarque=${it.kmEmbarque}km" } ?: "") +
+            "\n\n"
+        try { java.io.File(filesDir, "diagnostico.txt").writeText(resumo + sb) } catch (_: Exception) {}
+        android.widget.Toast.makeText(this,
+            "Diagnóstico: $total textos em ${raiz?.packageName ?: "nenhum app"}. Veja em ⚙", android.widget.Toast.LENGTH_LONG).show()
+    }
+
+    private fun despejar(n: AccessibilityNodeInfo?, sb: StringBuilder, prof: Int): Int {
+        if (n == null || prof > 45 || sb.length > 200_000) return 0
+        var c = 0
+        val t = n.text?.toString()
+        val cd = n.contentDescription?.toString()
+        val id = n.viewIdResourceName
+        if (!t.isNullOrBlank() || !cd.isNullOrBlank() || prof < 3) {
+            val r = Rect().also { n.getBoundsInScreen(it) }
+            sb.append("  ".repeat(prof.coerceAtMost(12)))
+              .append(n.className?.toString()?.substringAfterLast('.'))
+            if (!t.isNullOrBlank()) { sb.append(" text=\"").append(t).append('"'); c++ }
+            if (!cd.isNullOrBlank()) { sb.append(" desc=\"").append(cd).append('"'); c++ }
+            if (id != null) sb.append(" id=").append(id)
+            if (n.isClickable) sb.append(" [clicável]")
+            sb.append(' ').append(r).append('\n')
+        }
+        for (i in 0 until n.childCount) c += despejar(n.getChild(i), sb, prof + 1)
+        return c
+    }
+
     private fun aprovada(o: Oferta): Boolean {
         if (o.porKm < cfg.minPorKm) return false
         if (cfg.minValor > 0 && (o.valor ?: 0.0) < cfg.minValor) return false
@@ -186,7 +246,7 @@ class AutoService : AccessibilityService() {
             cliqueAgendado = false
             if (!rodando) return@postDelayed
             // Relê a tela: o card ainda está lá e ainda passa no filtro?
-            val root = rootInActiveWindow ?: return@postDelayed
+            val root = raizDoApp() ?: return@postDelayed
             val alvo = Leitor.ler(root, cfg).ofertas.firstOrNull {
                 abs(it.botao.centerY() - oferta.botao.centerY()) < 60 && aprovada(it)
             } ?: return@postDelayed

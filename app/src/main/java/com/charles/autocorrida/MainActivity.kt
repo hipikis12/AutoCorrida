@@ -56,6 +56,28 @@ class MainActivity : Activity() {
         }
         botao("Zerar contador") { cfg.aceitas = 0; atualizarStatus() }
 
+        titulo("Diagnóstico")
+        col.addView(TextView(this).apply {
+            text = "Abra o app de corrida na tela de solicitações (ou com cards) e toque em 🔍 na barrinha. Depois volte aqui."
+            textSize = 12f; alpha = 0.7f
+        })
+        val diagTxt = TextView(this).apply { textSize = 11f; setTextIsSelectable(true) }
+        botao("Ver último diagnóstico") {
+            val f = java.io.File(filesDir, "diagnostico.txt")
+            diagTxt.text = if (f.exists()) f.readText().take(6000) + if (f.length() > 6000) "\n…(use Compartilhar para o completo)" else ""
+                           else "Nenhum diagnóstico ainda. Toque em 🔍 na barrinha com o app de corrida aberto."
+        }
+        botao("Compartilhar diagnóstico") {
+            val f = java.io.File(filesDir, "diagnostico.txt")
+            if (!f.exists()) { toast("Faça o diagnóstico primeiro (🔍)"); return@botao }
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Diagnóstico AutoCorrida")
+                putExtra(Intent.EXTRA_TEXT, f.readText().take(90_000))
+            }, "Enviar diagnóstico"))
+        }
+        col.addView(diagTxt)
+
         var secao = ""
         for (c in Config.CAMPOS) {
             if (c.secao != secao) { titulo(c.secao); secao = c.secao }

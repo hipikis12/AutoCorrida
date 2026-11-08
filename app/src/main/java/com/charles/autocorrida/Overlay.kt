@@ -51,8 +51,9 @@ class Overlay(private val svc: AutoService) {
         val l = LinearLayout(svc).apply { orientation = LinearLayout.VERTICAL }
         btnEstado = botao("▶", COR_PARADO).also { it.setOnClickListener { svc.alternar() } }
         val cfg = botao("⚙", COR_NEUTRA).also { it.setOnClickListener { svc.abrirConfig() } }
+        val diag = botao("🔍", COR_NEUTRA).also { it.setOnClickListener { svc.diagnosticar() } }
         val mover = botao("✥", COR_NEUTRA).also { it.setOnTouchListener(arrastar) }
-        l.addView(btnEstado); l.addView(cfg); l.addView(mover)
+        l.addView(btnEstado); l.addView(cfg); l.addView(diag); l.addView(mover)
         root = l
         wm.addView(l, lp)
     }
