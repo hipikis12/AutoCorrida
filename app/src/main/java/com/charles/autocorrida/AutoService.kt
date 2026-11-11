@@ -43,11 +43,14 @@ class AutoService : AccessibilityService() {
     private var jaRetentou = false
     private var ofertasDesde = 0L
     private var ultimoPasso = 0L
+    private var lendo = false
+    private lateinit var ocr: Ocr
 
     // ---------- ciclo de vida ----------
     override fun onServiceConnected() {
         instance = this
         cfg = Config(this)
+        ocr = Ocr(this)
         overlay = Overlay(this).also { it.mostrar() }
         atualizarOverlay()
     }
@@ -62,6 +65,7 @@ class AutoService : AccessibilityService() {
     override fun onDestroy() {
         h.removeCallbacksAndMessages(null)
         overlay?.remover(); overlay = null
+        if (::ocr.isInitialized) ocr.fechar()
         instance = null
         super.onDestroy()
     }
@@ -92,6 +96,7 @@ class AutoService : AccessibilityService() {
         rodando = false
         estado = Estado.PARADO
         cliqueAgendado = false
+        lendo = false
         h.removeCallbacksAndMessages(null)
         atualizarOverlay()
     }
@@ -118,15 +123,49 @@ class AutoService : AccessibilityService() {
     }
 
     private fun passo() {
-        if (gestoEmAndamento || cliqueAgendado) return
+        if (gestoEmAndamento || cliqueAgendado || lendo) return
+        lendo = true
+        lerTela(cfg.intervaloOcrMs) { tela ->
+            lendo = false
+            if (tela != null && rodando && !gestoEmAndamento && !cliqueAgendado) processar(tela)
+        }
+    }
+
+    /** Nossa tela de configurações está na frente? (não pode ler ela: tem "Escolher" escrito nos campos) */
+    private fun nossaTelaNaFrente(): Boolean = try {
+        windows.any { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && (it.isActive || it.isFocused) &&
+            it.root?.packageName?.toString() == packageName }
+    } catch (_: Exception) { false }
+
+    /**
+     * Lê a tela: 1º pela acessibilidade (rápido); se vier vazia — caso do 99, que não expõe os textos —
+     * tira um print e lê por imagem (OCR). Modo 1 = só acessibilidade, 2 = só imagem.
+     */
+    private fun lerTela(intervaloOcr: Long, cb: (Tela?) -> Unit) {
+        if (nossaTelaNaFrente()) { cb(null); return }
+        val root = raizDoApp()
+        val pkg = root?.packageName?.toString()
+        if (pkg != null) ultimoPacote = pkg
+        if (cfg.pacoteAlvo.isNotEmpty() && pkg != cfg.pacoteAlvo) { cb(null); return }  // outro app na frente
+
+        val modo = cfg.modoLeitura
+        var porArvore: Tela? = null
+        if (root != null && modo != 2) {
+            porArvore = Leitor.ler(root, cfg)
+            if (!porArvore.vazia || modo == 1) { cb(porArvore); return }
+        }
+        if (!ocr.disponivel) { cb(porArvore); return }
+
+        val area = Rect()
+        root?.getBoundsInScreen(area)
+        if (area.isEmpty) resources.displayMetrics.let { area.set(0, 0, it.widthPixels, it.heightPixels) }
+        ocr.ler(intervaloOcr) { itens ->
+            cb(if (itens == null) null else Leitor.analisar(itens, area, cfg, "imagem"))
+        }
+    }
+
+    private fun processar(tela: Tela) {
         val now = SystemClock.uptimeMillis()
-        val root = raizDoApp() ?: return
-        val pkg = root.packageName?.toString() ?: return
-        ultimoPacote = pkg
-        if (cfg.pacoteAlvo.isNotEmpty() && pkg != cfg.pacoteAlvo) return  // outro app na frente
-
-        val tela = Leitor.ler(root, cfg)
-
         when {
             tela.buscando -> {
                 if (estado != Estado.BUSCANDO) {
@@ -193,14 +232,40 @@ class AutoService : AccessibilityService() {
             if (r != null) total += despejar(r, sb, 0)
         }
         val raiz = raizDoApp()
-        val tela = raiz?.let { Leitor.ler(it, cfg) }
-        val resumo = "App lido: ${raiz?.packageName}\nTextos encontrados: $total\n" +
-            "Tela de busca detectada: ${tela?.buscando}\nOfertas detectadas: ${tela?.ofertas?.size ?: 0}" +
-            (tela?.ofertas?.joinToString("") { "\n  • R$/km=${it.porKm} valor=${it.valor} embarque=${it.kmEmbarque}km" } ?: "") +
-            "\n\n"
-        try { java.io.File(filesDir, "diagnostico.txt").writeText(resumo + sb) } catch (_: Exception) {}
-        android.widget.Toast.makeText(this,
-            "Diagnóstico: $total textos em ${raiz?.packageName ?: "nenhum app"}. Veja em ⚙", android.widget.Toast.LENGTH_LONG).show()
+        val telaArv = raiz?.let { Leitor.ler(it, cfg) }
+        val resumoArv = "App lido: ${raiz?.packageName}\n" +
+            "[ACESSIBILIDADE] textos: $total | busca: ${telaArv?.buscando} | ofertas: ${telaArv?.ofertas?.size ?: 0}" +
+            descreverOfertas(telaArv) + "\n"
+
+        if (!ocr.disponivel) {
+            salvarDiag(resumoArv + "[IMAGEM] indisponível: Android abaixo do 11\n\n" + sb,
+                "Diagnóstico: $total textos (sem leitura por imagem)")
+            return
+        }
+        val area = Rect().also { raiz?.getBoundsInScreen(it) }
+        if (area.isEmpty) resources.displayMetrics.let { area.set(0, 0, it.widthPixels, it.heightPixels) }
+        ocr.ler(0) { itens ->
+            val o = StringBuilder()
+            if (itens == null) {
+                o.append("[IMAGEM] falhou: ${ocr.ultimoErro}\n")
+            } else {
+                val t = Leitor.analisar(itens, area, cfg, "imagem")
+                o.append("[IMAGEM] linhas: ${itens.size} | busca: ${t.buscando} | ofertas: ${t.ofertas.size}")
+                    .append(descreverOfertas(t)).append("\n\n=== textos lidos na imagem ===\n")
+                for (it in itens.sortedWith(compareBy({ it.r.top }, { it.r.left })))
+                    o.append(it.texto).append("   ").append(it.r).append('\n')
+            }
+            salvarDiag(resumoArv + o + "\n\n=== árvore de acessibilidade ===\n" + sb,
+                "Diagnóstico: imagem ${itens?.size ?: 0} linhas, acessibilidade $total textos. Veja em ⚙")
+        }
+    }
+
+    private fun descreverOfertas(t: Tela?): String =
+        t?.ofertas?.joinToString("") { "\n  • R$/km=${it.porKm} valor=${it.valor} embarque=${it.kmEmbarque}km botão=${it.botao}" } ?: ""
+
+    private fun salvarDiag(txt: String, aviso: String) {
+        try { java.io.File(filesDir, "diagnostico.txt").writeText(txt) } catch (_: Exception) {}
+        android.widget.Toast.makeText(this, aviso, android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun despejar(n: AccessibilityNodeInfo?, sb: StringBuilder, prof: Int): Int {
@@ -246,16 +311,20 @@ class AutoService : AccessibilityService() {
             cliqueAgendado = false
             if (!rodando) return@postDelayed
             // Relê a tela: o card ainda está lá e ainda passa no filtro?
-            val root = raizDoApp() ?: return@postDelayed
-            val alvo = Leitor.ler(root, cfg).ofertas.firstOrNull {
-                abs(it.botao.centerY() - oferta.botao.centerY()) < 60 && aprovada(it)
-            } ?: return@postDelayed
-            tocar(alvo)
-            cliqueEm = SystemClock.uptimeMillis()
-            if (estado != Estado.AGUARDANDO) jaRetentou = false
-            mudar(Estado.AGUARDANDO)
-            cfg.aceitas = cfg.aceitas + 1
-            vibrar()
+            cliqueAgendado = true
+            lerTela(0) { tela ->
+                cliqueAgendado = false
+                if (!rodando || tela == null) return@lerTela
+                val alvo = tela.ofertas.firstOrNull {
+                    abs(it.botao.centerY() - oferta.botao.centerY()) < 60 && aprovada(it)
+                } ?: return@lerTela
+                tocar(alvo)
+                cliqueEm = SystemClock.uptimeMillis()
+                if (estado != Estado.AGUARDANDO) jaRetentou = false
+                mudar(Estado.AGUARDANDO)
+                cfg.aceitas = cfg.aceitas + 1
+                vibrar()
+            }
         }, atraso)
     }
 

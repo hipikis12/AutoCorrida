@@ -36,6 +36,11 @@ class Config(ctx: Context) {
             Campo("reacaoMaxMs", "Clique", "Tempo de reação máximo (ms)", "900"),
             Campo("timeoutAguardarSeg", "Clique", "Após escolher, esperar a tela de busca por até (s)", "90"),
 
+            Campo("modoLeitura", "Leitura da tela", "Modo de leitura (0, 1 ou 2)", "0",
+                ajuda = "0 = automático (acessibilidade e, se vier vazio, imagem) | 1 = só acessibilidade | 2 = só imagem. Para o 99 use 0 ou 2."),
+            Campo("intervaloOcrMs", "Leitura da tela", "Ler a imagem a cada (ms)", "600",
+                ajuda = "Menor = reage mais rápido, gasta mais bateria. Mínimo 350."),
+
             Campo("textoBuscando", "Textos da tela (avançado)", "Texto da tela de busca", "Ainda buscando", numero = false),
             Campo("textoEscolher", "Textos da tela (avançado)", "Texto do botão", "Escolher", numero = false),
             Campo("pacoteAlvo", "Textos da tela (avançado)", "Pacote do app de corrida", "", numero = false,
@@ -62,6 +67,8 @@ class Config(ctx: Context) {
     val reacaoMinMs get() = d("reacaoMinMs").toLong()
     val reacaoMaxMs get() = d("reacaoMaxMs").toLong()
     val timeoutAguardarSeg get() = d("timeoutAguardarSeg")
+    val modoLeitura get() = d("modoLeitura").toInt()
+    val intervaloOcrMs get() = d("intervaloOcrMs").toLong()
     val textoBuscando get() = texto("textoBuscando").trim()
     val textoEscolher get() = texto("textoEscolher").trim()
     val pacoteAlvo get() = texto("pacoteAlvo").trim()

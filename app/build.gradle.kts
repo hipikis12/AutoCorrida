@@ -27,6 +27,8 @@ android {
         // No GitHub cada build ganha um número maior, então a atualização instala por cima.
         versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        // Só os processadores de celular de verdade -> APK menor
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {
@@ -66,5 +68,7 @@ android {
     }
 }
 
-// Sem dependências externas: só o framework do Android -> APK minúsculo e rápido.
-dependencies { }
+dependencies {
+    // Leitor de texto em imagem do Google, 100% offline (modelo embutido no APK)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}
