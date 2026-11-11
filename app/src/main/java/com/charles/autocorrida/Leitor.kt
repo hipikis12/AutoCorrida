@@ -23,8 +23,8 @@ class Item(val texto: String, val r: Rect, val node: AccessibilityNodeInfo? = nu
 object Leitor {
 
     // Tolerante a erros comuns do OCR: "RS", "R5", espaço sobrando, "/ km", "lkm"
-    private val RE_KM = Regex("""R\s*[$S5]\s*(\d{1,3}\s*[.,]\s*\d{1,2})\s*/\s*[kK]\s*[mM]""")
-    private val RE_VALOR = Regex("""R\s*[$S5]\s*(\d{1,4}(?:\.\d{3})*\s*,\s*\d{2})(?!\d)(?!\s*/\s*[kK])""")
+    private val RE_KM = Regex("""R\s*[${"$"}S5]\s*(\d{1,3}\s*[.,]\s*\d{1,2})\s*/\s*[kK]\s*[mM]""")
+    private val RE_VALOR = Regex("""R\s*[${"$"}S5]\s*(\d{1,4}(?:\.\d{3})*\s*,\s*\d{2})(?!\d)(?!\s*/\s*[kK])""")
     private val RE_EMBARQUE = Regex("""\(\s*\d+\s*min\s*[,.]?\s*(\d+(?:[.,]\d+)?)\s*km""", RegexOption.IGNORE_CASE)
 
     fun num(s: String): Double? {
